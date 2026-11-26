@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>Rollana Motion</title>
+<link rel="stylesheet" href="assets/fonts.local.css">
+<style>
+  html,body{margin:0;background:#000;overflow:hidden}
+  canvas{display:block;width:1080px;height:1920px}
+  body.preview canvas{height:96vh;width:auto;margin:2vh auto}
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+/* ============================================================
+   ROLLANA — motion graphic (1080x1920, 30fps, 33s)
+   The product photo is drawn untouched (only moved / scaled /
+   rotated as a whole). No recolouring, no reshaping.
+   ============================================================ */
+const W = 1080, H = 1920, DUR = 33;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ---------- helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eIO = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const eOut = t => 1 - Math.pow(1 - t, 3);
+const eOutExpo = t => t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+const eBack = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+function rand(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+
+const GOLD = ['#fff1c4', '#e9c46a', '#b8862e', '#7a5418'];
+function goldGrad(x0, y0, x1, y1) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, GOLD[0]); g.addColorStop(.35, GOLD[1]); g.addColorStop(.7, GOLD[2]); g.addColorStop(1, GOLD[1]);
+  return g;
+}
+
+// ---------- assets ----------
+const img = new Image();
+img.src = 'assets/product.png';
+let prod; // feathered copy (edges only, product untouched)
+function buildProduct() {
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const x = c.getContext('2d');
+  x.drawImage(img, 0, 0);
+  // feather only the outermost 10px of the photo's dark background so it melts into the scene
+  x.globalCompositeOperation = 'destination-in';
+  const f = 10;
+  const m = document.createElement('canvas'); m.width = c.width; m.height = c.height;
+  const mx = m.getContext('2d');
+  mx.fillStyle = '#000'; mx.filter = `blur(${f / 2}px)`;
+  mx.fillRect(f, f, c.width - 2 * f, c.height - 2 * f);
+  x.drawImage(m, 0, 0);
+  prod = c;
+}
+
+// grain textures
+const grains = [];
+function buildGrain() {
+  for (let k = 0; k < 6; k++) {
+    const c = document.createElement('canvas'); c.width = 540; c.height = 960;
+    const x = c.getContext('2d'); const id = x.createImageData(540, 960); const r = rand(99 + k);
+    for (let i = 0; i < id.data.length; i += 4) { const v = r() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 22; }
+    x.putImageData(id, 0, 0); grains.push(c);
+  }
+}
+
+// particles
+const parts = (() => { const r = rand(4242); return Array.from({ length: 140 }, () => ({ x: r() * W, y: r() * H, s: .6 + r() * 2.6, v: 8 + r() * 30, p: r() * 6.28, d: r() })); })();
+
+// ---------- background ----------
+function background(t) {
+  ctx.fillStyle = '#070505'; ctx.fillRect(0, 0, W, H);
+  // moving warm light blobs
+  const blobs = [
+    { x: 540 + 260 * Math.sin(t * .35), y: 700 + 200 * Math.cos(t * .27), r: 900, c: 'rgba(120,14,22,0.42)' },
+    { x: 300 + 200 * Math.cos(t * .22), y: 1400 + 150 * Math.sin(t * .31), r: 800, c: 'rgba(150,105,40,0.20)' },
+    { x: 820 + 150 * Math.sin(t * .18 + 2), y: 300 + 120 * Math.cos(t * .4), r: 700, c: 'rgba(90,10,18,0.35)' },
+  ];
+  ctx.globalCompositeOperation = 'lighter';
+  for (const b of blobs) {
+    const g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
+    g.addColorStop(0, b.c); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  // subtle diagonal gold lines (luxury pattern)
+  ctx.save(); ctx.globalAlpha = .05; ctx.strokeStyle = '#e9c46a'; ctx.lineWidth = 1;
+  const off = (t * 12) % 80;
+  for (let i = -H; i < W + H; i += 80) { ctx.beginPath(); ctx.moveTo(i + off, 0); ctx.lineTo(i + off - H * .6, H); ctx.stroke(); }
+  ctx.restore();
+}
+
+function particles(t, amt = 1) {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (const p of parts) {
+    const y = ((p.y - t * p.v) % H + H) % H;
+    const x = p.x + Math.sin(t * .6 + p.p) * 18;
+    const tw = .35 + .65 * Math.abs(Math.sin(t * 1.7 + p.p * 3));
+    ctx.globalAlpha = tw * amt * (p.d > .8 ? 1 : .55);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, p.s * 4);
+    g.addColorStop(0, 'rgba(255,230,160,1)'); g.addColorStop(1, 'rgba(255,200,90,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, p.s * 4, 0, 6.283); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// silky red ribbon: band along a sine path with twist
+function ribbon(t, { y0, amp, freq, speed, width, alpha = 1, reveal = 1, tilt = 0, phase = 0 }) {
+  const N = 90, pts = [];
+  const x0 = -120, x1 = W + 120;
+  const xEnd = lerp(x0, x1, reveal);
+  for (let i = 0; i <= N; i++) {
+    const u = i / N, x = lerp(x0, xEnd, u);
+    const y = y0 + Math.sin(x * freq + t * speed + phase) * amp + (x - W / 2) * tilt;
+    const tw = Math.cos(x * freq * 1.7 + t * speed * 1.3 + phase);
+    pts.push({ x, y, w: width * (0.25 + 0.75 * Math.abs(tw)), sh: tw });
+  }
+  ctx.save(); ctx.globalAlpha = alpha;
+  for (let i = 0; i < N; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const l = 30 + 30 * Math.max(0, a.sh); // lightness from twist
+    ctx.fillStyle = `hsl(355, 82%, ${l}%)`;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y - a.w / 2); ctx.lineTo(b.x + .6, b.y - b.w / 2);
+    ctx.lineTo(b.x + .6, b.y + b.w / 2); ctx.lineTo(a.x, a.y + a.w / 2); ctx.closePath(); ctx.fill();
+  }
+  // specular line
+  ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = 'rgba(255,170,170,0.22)'; ctx.lineWidth = 3;
+  ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y - p.w * .25) : ctx.moveTo(p.x, p.y - p.w * .25)); ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- camera on the product ----------
+// s = rendered width of product photo, (fx,fy) photo point placed at (cx,cy)
+const K = [
+  { t: 0,    s: 1000, fx: 762, fy: 230, cx: 1900, cy: 980, r: -.16 },
+  { t: 3.15, s: 1000, fx: 762, fy: 230, cx: 1900, cy: 980, r: -.16, e: eBack },
+  { t: 4.25, s: 1000, fx: 762, fy: 230, cx: 540,  cy: 990, r: -.07 },
+  { t: 8.2,  s: 1090, fx: 762, fy: 230, cx: 540,  cy: 990, r: -.04 },
+  { t: 9.3,  s: 2900, fx: 1168, fy: 215, cx: 540, cy: 930, r: 0 },
+  { t: 13.4, s: 3080, fx: 1168, fy: 215, cx: 540, cy: 930, r: 0 },
+  { t: 14.4, s: 2900, fx: 250, fy: 185, cx: 540,  cy: 930, r: 0 },
+  { t: 16.9, s: 3020, fx: 250, fy: 185, cx: 540,  cy: 930, r: 0 },
+  { t: 17.8, s: 3300, fx: 1172, fy: 285, cx: 540, cy: 930, r: 0 },
+  { t: 19.9, s: 3420, fx: 1172, fy: 285, cx: 540, cy: 930, r: 0 },
+  { t: 20.9, s: 1950, fx: 690, fy: 205, cx: 540,  cy: 960, r: 0 },
+  { t: 24.5, s: 2120, fx: 690, fy: 205, cx: 540,  cy: 960, r: 0 },
+  { t: 25.6, s: 1000, fx: 762, fy: 230, cx: 540,  cy: 1010, r: -.05 },
+  { t: 33,   s: 1070, fx: 762, fy: 230, cx: 540,  cy: 1010, r: -.03 },
+];
+function cam(t) {
+  let i = 0; while (i < K.length - 2 && t > K[i + 1].t) i++;
+  const a = K[i], b = K[i + 1];
+  const p = prog(t, a.t, b.t); const e = (a.e || eIO)(p);
+  const o = {}; for (const k of ['s', 'fx', 'fy', 'cx', 'cy', 'r']) o[k] = lerp(a[k], b[k], e);
+  o.moving = Math.abs(b.cx - a.cx) > 50 && p > 0 && p < 1 ? (1 - p) : 0;
+  return o;
+}
+function drawProduct(t, c, alpha = 1) {
+  const sc = c.s / prod.width;
+  ctx.save(); ctx.globalAlpha = alpha;
+  ctx.translate(c.cx, c.cy); ctx.rotate(c.r); ctx.scale(sc, sc); ctx.translate(-c.fx, -c.fy);
+  // floor shadow
+  ctx.save(); ctx.globalAlpha = alpha * .55; ctx.filter = 'blur(40px)'; ctx.fillStyle = '#000';
+  ctx.fillRect(40, prod.height * .55, prod.width - 80, prod.height * .6); ctx.restore();
+  // motion trail when sliding in
+  if (c.moving > 0) {
+    for (let k = 4; k >= 1; k--) { ctx.globalAlpha = alpha * .12 * c.moving; ctx.drawImage(prod, 90 * k * c.moving, 0); }
+  }
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(prod, 0, 0);
+  ctx.restore();
+}
+// passing light reflection (moves across, never recolours the pack permanently)
+function sheen(t, c, start, dur) {
+  const p = prog(t, start, start + dur); if (p <= 0 || p >= 1) return;
+  const sc = c.s / prod.width;
+  ctx.save(); ctx.translate(c.cx, c.cy); ctx.rotate(c.r); ctx.scale(sc, sc); ctx.translate(-c.fx, -c.fy);
+  ctx.beginPath(); ctx.rect(20, 20, prod.width - 40, prod.height - 40); ctx.clip();
+  const x = lerp(-300, prod.width + 300, eIO(p));
+  const g = ctx.createLinearGradient(x - 160, 0, x + 160, 0);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(.5, 'rgba(255,250,235,0.28)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.globalCompositeOperation = 'soft-light'; ctx.fillStyle = g;
+  ctx.setTransform(ctx.getTransform().multiply(new DOMMatrix().skewX(-20)));
+  ctx.fillRect(x - 200, -100, 400, prod.height + 200);
+  ctx.restore();
+}
+// map photo coords -> canvas coords for callouts
+function P(c, x, y) {
+  const sc = c.s / prod.width; const dx = (x - c.fx) * sc, dy = (y - c.fy) * sc;
+  return [c.cx + dx * Math.cos(c.r) - dy * Math.sin(c.r), c.cy + dx * Math.sin(c.r) + dy * Math.cos(c.r)];
+}
+
+// ---------- typography ----------
+function setFont(size, fam = 'Tajawal', w = 800) { ctx.font = `${w} ${size}px "${fam}"`; }
+/* word-by-word RTL kinetic text */
+function kText(t, txt, { x = W / 2, y, size, fam = 'Tajawal', w = 800, tIn, tOut = 99, fill = '#fff', gold = false, stagger = .09, glow = 0, style = 'rise' }) {
+  if (t < tIn || t > tOut + .6) return;
+  setFont(size, fam, w); ctx.direction = 'rtl'; ctx.textBaseline = 'middle';
+  const words = txt.split(' ');
+  const sp = ctx.measureText(' ').width;
+  const ws = words.map(s => ctx.measureText(s).width);
+  const total = ws.reduce((a, b) => a + b, 0) + sp * (words.length - 1);
+  let cx = x + total / 2;
+  const outP = eIO(prog(t, tOut, tOut + .45));
+  words.forEach((wd, i) => {
+    const p = prog(t, tIn + i * stagger, tIn + i * stagger + .55);
+    const e = style === 'slam' ? eBack(p) : eOutExpo(p);
+    const a = clamp(p * 2.2) * (1 - outP);
+    if (a <= 0) { cx -= ws[i] + sp; return; }
+    ctx.save();
+    const wx = cx - ws[i] / 2;
+    let dy = (1 - e) * 60 - outP * 50;
+    let sc = style === 'slam' ? lerp(2.4, 1, e) : lerp(1.15, 1, e);
+    ctx.translate(wx, y + dy); ctx.scale(sc, sc);
+    ctx.globalAlpha = a;
+    if (style !== 'slam' && p < 1) ctx.filter = `blur(${(1 - e) * 10}px)`;
+    ctx.textAlign = 'center';
+    if (glow) { ctx.shadowColor = gold ? 'rgba(233,196,106,.65)' : 'rgba(255,255,255,.5)'; ctx.shadowBlur = glow; }
+    ctx.fillStyle = gold ? goldGrad(-ws[i] / 2, -size / 2, ws[i] / 2, size / 2) : fill;
+    ctx.fillText(wd, 0, 0);
+    ctx.restore();
+    cx -= ws[i] + sp;
+  });
+}
+function pill(t, txt, x, y, tIn, tOut, opts = {}) {
+  const p = eBack(prog(t, tIn, tIn + .5)); const o = 1 - eIO(prog(t, tOut, tOut + .4));
+  if (p <= 0 || o <= 0) return;
+  setFont(opts.size || 46, 'Tajawal', 800); ctx.direction = 'rtl'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(txt).width + 80, h = (opts.size || 46) * 1.9;
+  ctx.save(); ctx.translate(x, y); ctx.scale(p, p); ctx.globalAlpha = o;
+  ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 30;
+  ctx.fillStyle = opts.bg || 'rgba(20,12,10,.72)';
+  ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, h / 2); ctx.fill(); ctx.shadowBlur = 0;
+  ctx.lineWidth = 3; ctx.strokeStyle = goldGrad(-w / 2, 0, w / 2, 0); ctx.stroke();
+  ctx.fillStyle = opts.color || '#fff3d6'; ctx.fillText(txt, 0, 4);
+  ctx.restore();
+}
+// gold callout ring around a feature + leader line
+function callout(t, c, px, py, rPhoto, tIn, tOut, lx, ly) {
+  const p = prog(t, tIn, tIn + .9); const o = 1 - prog(t, tOut, tOut + .35);
+  if (p <= 0 || o <= 0) return;
+  const [x, y] = P(c, px, py); const r = rPhoto * c.s / prod.width;
+  ctx.save(); ctx.globalAlpha = o; ctx.lineWidth = 5; ctx.strokeStyle = goldGrad(x - r, y - r, x + r, y + r);
+  ctx.shadowColor = 'rgba(233,196,106,.8)'; ctx.shadowBlur = 18;
+  ctx.beginPath(); ctx.arc(x, y, r, -Math.PI / 2, -Math.PI / 2 + eOut(p) * Math.PI * 2); ctx.stroke();
+  // rotating dashed outer ring
+  ctx.setLineDash([6, 18]); ctx.lineWidth = 2; ctx.globalAlpha = o * .7 * eOut(p);
+  ctx.beginPath(); ctx.arc(x, y, r + 26, t * .8, t * .8 + Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  if (lx !== undefined) {
+    const lp = prog(t, tIn + .5, tIn + 1.1);
+    const sx = x + (lx - x) * 0, sy = y + Math.sign(ly - y) * (r + 4);
+    ctx.globalAlpha = o; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(lerp(sx, lx, eOut(lp)), lerp(sy, ly, eOut(lp))); ctx.stroke();
+    ctx.fillStyle = GOLD[1]; ctx.beginPath(); ctx.arc(sx, sy, 7 * clamp(lp * 3), 0, 6.283); ctx.fill();
+  }
+  ctx.restore();
+}
+function flash(t, at, dur = .35, col = '255,240,210', peak = .85) {
+  const p = prog(t, at, at + dur); if (p <= 0 || p >= 1) return;
+  ctx.fillStyle = `rgba(${col},${peak * (1 - p) * (1 - p)})`; ctx.fillRect(0, 0, W, H);
+}
+function burst(t, at, x, y, n = 28) {
+  const p = prog(t, at, at + 1.4); if (p <= 0 || p >= 1) return;
+  const r = rand(at * 1000 | 0);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n; i++) {
+    const a = r() * 6.283, sp = 200 + r() * 520, d = eOut(p) * sp;
+    ctx.globalAlpha = (1 - p) * (.5 + r() * .5);
+    ctx.fillStyle = i % 3 ? '#ffd98a' : '#ffffff';
+    ctx.beginPath(); ctx.arc(x + Math.cos(a) * d, y + Math.sin(a) * d, 2 + r() * 4, 0, 6.283); ctx.fill();
+  }
+  ctx.restore();
+}
+function vignette() {
+  const g = ctx.createRadialGradient(W / 2, H / 2, H * .25, W / 2, H / 2, H * .75);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.78)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+// band mask for close-ups: darken above/below the zoomed strip so text sits on clean black
+function bands(a) {
+  if (a <= 0) return;
+  ctx.save(); ctx.globalAlpha = a;
+  let g = ctx.createLinearGradient(0, 0, 0, 560); g.addColorStop(0, 'rgba(7,5,5,1)'); g.addColorStop(.75, 'rgba(7,5,5,.92)'); g.addColorStop(1, 'rgba(7,5,5,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, 560);
+  g = ctx.createLinearGradient(0, 1300, 0, H); g.addColorStop(0, 'rgba(7,5,5,0)'); g.addColorStop(.25, 'rgba(7,5,5,.92)'); g.addColorStop(1, 'rgba(7,5,5,1)');
+  ctx.fillStyle = g; ctx.fillRect(0, 1300, W, H - 1300);
+  ctx.restore();
+}
+function progressBar(t) {
+  ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(60, H - 70, W - 120, 4);
+  ctx.fillStyle = goldGrad(60, 0, W - 60, 0); ctx.fillRect(W - 60 - (W - 120) * (t / DUR), H - 70, (W - 120) * (t / DUR), 4);
+}
+
+// ---------- master render ----------
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  // camera shake on impacts
+  let shake = 0;
+  for (const at of [0.32, 3.2, 24.9]) { const p = prog(t, at, at + .45); if (p > 0 && p < 1) shake += (1 - p) * 16; }
+  ctx.translate(Math.sin(t * 90) * shake, Math.cos(t * 77) * shake);
+
+  background(t);
+  particles(t, t < 3.2 ? .5 : 1);
+
+  /* ---------------- 1) HOOK 0 – 3.15 ---------------- */
+  if (t < 3.6) {
+    const o = 1 - prog(t, 2.9, 3.25);
+    ctx.save(); ctx.globalAlpha = o;
+    ribbon(t, { y0: 1380, amp: 70, freq: .006, speed: 2.2, width: 70, reveal: eOut(prog(t, 1.2, 2.3)), tilt: -.25 });
+    ctx.restore();
+    kText(t, 'استنّى!', { y: 800, size: 250, fam: 'Lalezar', w: 400, tIn: .32, tOut: 2.85, gold: true, style: 'slam', glow: 40 });
+    kText(t, 'لا تقلّب…', { y: 1050, size: 110, tIn: 1.3, tOut: 2.85, fill: '#ffffff', glow: 20 });
+    // red underline swipe
+    const up = eOutExpo(prog(t, 1.6, 2.1)) * (1 - prog(t, 2.85, 3.2));
+    if (up > 0) { ctx.fillStyle = '#c1121f'; ctx.fillRect(540 + 230 - 460 * up, 1125, 460 * up, 10); }
+  }
+
+  /* ---------------- PRODUCT ---------------- */
+  const c = cam(t);
+  if (t >= 3.15) {
+    // ribbons behind product in reveal & end card
+    const rib = Math.max(prog(t, 3.3, 4.5) * (1 - prog(t, 8.0, 8.8)), prog(t, 25.0, 26.2));
+    if (rib > 0) {
+      ribbon(t, { y0: c.cy - 260, amp: 60, freq: .005, speed: 1.4, width: 60, alpha: rib * .85, reveal: rib, tilt: -.12 });
+      ribbon(t, { y0: c.cy + 300, amp: 50, freq: .0065, speed: -1.1, width: 46, alpha: rib * .7, reveal: rib, tilt: -.1, phase: 2 });
+    }
+    // halo behind product
+    const hg = ctx.createRadialGradient(c.cx, c.cy, 0, c.cx, c.cy, 700);
+    hg.addColorStop(0, 'rgba(255,225,170,0.22)'); hg.addColorStop(1, 'rgba(255,225,170,0)');
+    ctx.fillStyle = hg; ctx.fillRect(0, 0, W, H);
+    drawProduct(t, c, clamp(prog(t, 3.15, 3.35)));
+    sheen(t, c, 4.5, 1.4);
+    sheen(t, c, 21.0, 1.6);
+    sheen(t, c, 27.3, 1.5);
+  }
+  flash(t, 3.2, .45);
+  burst(t, 4.25, 540, 990, 36);
+
+  /* ---------------- 2) REVEAL 3.4 – 8.3 ---------------- */
+  kText(t, 'في شي أبيض ناعم…', { y: 560, size: 92, tIn: 3.5, tOut: 7.9, fill: '#fff' });
+  kText(t, 'راح يغيّر مزاجك', { y: 1430, size: 112, fam: 'Lalezar', w: 400, tIn: 5.3, tOut: 7.9, gold: true, glow: 25 });
+
+  /* ---------------- close-up bands ---------------- */
+  const bandA = prog(t, 8.6, 9.3) * (1 - prog(t, 24.3, 25.3));
+  bands(bandA);
+
+  /* ---------------- 3) ALMOND 8.4 – 13.6 ---------------- */
+  callout(t, c, 1168, 205, 150, 9.4, 13.3, 540, 1330);
+  kText(t, 'حبّة لوزٍ كاملة', { y: 330, size: 120, fam: 'Lalezar', w: 400, tIn: 8.9, tOut: 13.3, gold: true, glow: 25 });
+  kText(t, 'في قلبٍ كريمي ناعم', { y: 1480, size: 84, tIn: 10.6, tOut: 13.3, fill: '#fff' });
+
+  /* ---------------- 4) COCONUT + WAFER 13.6 – 20 ---------------- */
+  callout(t, c, 250, 185, 120, 14.6, 16.8);
+  kText(t, 'مغطّاة بجوز الهند', { y: 330, size: 118, fam: 'Lalezar', w: 400, tIn: 14.2, tOut: 16.9, gold: true, glow: 25 });
+  pill(t, '✦  قرمشة جوز الهند  ✦', 540, 1480, 14.9, 16.9);
+  kText(t, 'وويفرٍ هشّ', { y: 330, size: 124, fam: 'Lalezar', w: 400, tIn: 17.5, tOut: 19.9, gold: true, glow: 25 });
+  kText(t, 'يذوب مع أوّل قضمة', { y: 1480, size: 88, tIn: 18.2, tOut: 19.9, fill: '#fff' });
+  callout(t, c, 1172, 205, 165, 17.9, 19.9);
+
+  /* ---------------- 5) LOGO / LUXURY 20 – 24.8 ---------------- */
+  burst(t, 21.0, 540, 960, 40);
+  kText(t, 'لحظةُ فخامة', { y: 360, size: 140, fam: 'Lalezar', w: 400, tIn: 20.6, tOut: 24.4, gold: true, glow: 35 });
+  kText(t, 'بين يديك', { y: 1500, size: 100, tIn: 21.8, tOut: 24.4, fill: '#fff' });
+
+  /* ---------------- 6) END CARD 24.8 – 33 ---------------- */
+  flash(t, 24.9, .4, '255,235,200', .6);
+  burst(t, 25.6, 540, 1010, 40);
+  if (t > 25.2) {
+    // brand title
+    kText(t, 'رولانا', { y: 470, size: 230, fam: 'Reem Kufi', w: 700, tIn: 25.4, gold: true, glow: 40, style: 'slam', stagger: 0 });
+    kText(t, 'شوكولاتة', { y: 650, size: 80, tIn: 26.0, fill: '#f3e6cf', stagger: 0 });
+    // gold divider
+    const dv = eOutExpo(prog(t, 26.2, 26.9));
+    ctx.fillStyle = goldGrad(340, 0, 740, 0); ctx.fillRect(540 - 200 * dv, 720, 400 * dv, 3);
+    kText(t, 'دلّع نفسك', { y: 1370, size: 96, fam: 'Lalezar', w: 400, tIn: 27.0, gold: true, glow: 20 });
+    // CTA button with pulse
+    const bp = eBack(prog(t, 27.8, 28.4));
+    if (bp > 0) {
+      const pulse = 1 + .04 * Math.sin((t - 28.4) * 6) * (t > 28.4);
+      ctx.save(); ctx.translate(540, 1560); ctx.scale(bp * pulse, bp * pulse);
+      const bw = 620, bh = 130;
+      ctx.shadowColor = 'rgba(193,18,31,.75)'; ctx.shadowBlur = 50;
+      const g = ctx.createLinearGradient(0, -bh / 2, 0, bh / 2); g.addColorStop(0, '#e0242f'); g.addColorStop(1, '#9e0d18');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2); ctx.fill();
+      ctx.shadowBlur = 0; ctx.lineWidth = 4; ctx.strokeStyle = goldGrad(-bw / 2, 0, bw / 2, 0); ctx.stroke();
+      // shine sweeping the button
+      const sx = ((t - 28.4) % 2.2) / 2.2 * (bw + 300) - bw / 2 - 150;
+      ctx.save(); ctx.clip(); const sg = ctx.createLinearGradient(sx - 60, 0, sx + 60, 0);
+      sg.addColorStop(0, 'rgba(255,255,255,0)'); sg.addColorStop(.5, 'rgba(255,255,255,.35)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = sg; ctx.fillRect(-bw / 2, -bh / 2, bw, bh); ctx.restore();
+      setFont(64, 'Tajawal', 800); ctx.direction = 'rtl'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff'; ctx.fillText('اطلبها الآن', 0, 6);
+      ctx.restore();
+    }
+  }
+
+  vignette();
+  // film grain
+  ctx.save(); ctx.globalCompositeOperation = 'overlay'; ctx.drawImage(grains[Math.floor(t * 24) % grains.length], 0, 0, W, H); ctx.restore();
+  // fade in / out
+  flash(t, 0, .35, '0,0,0', 1);
+  const fo = prog(t, 32.2, 33); if (fo > 0) { ctx.fillStyle = `rgba(0,0,0,${fo})`; ctx.fillRect(-50, -50, W + 100, H + 100); }
+  if (t > 3.2 && t < 32) progressBar(t);
+}
+
+// ---------- boot ----------
+window.ready = (async () => {
+  await new Promise(r => img.complete ? r() : (img.onload = r));
+  await Promise.all([
+    document.fonts.load('400 100px "Lalezar"', 'استنّى'),
+    document.fonts.load('800 100px "Tajawal"', 'لا تقلّب'),
+    document.fonts.load('500 100px "Tajawal"', 'ناعم'),
+    document.fonts.load('700 100px "Reem Kufi"', 'رولانا'),
+  ]);
+  buildProduct(); buildGrain();
+  return true;
+})();
+window.render = render;
+
+// live preview: open scene.html?play
+if (location.search.includes('play')) {
+  document.body.classList.add('preview');
+  window.ready.then(() => {
+    const au = new Audio('rollana_audio.m4a');
+    let t0 = null;
+    document.body.onclick = () => { t0 = performance.now(); au.currentTime = 0; au.play().catch(() => {}); };
+    t0 = performance.now();
+    const loop = now => { const t = ((now - t0) / 1000) % DUR; render(t); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  });
+}
+</script>
+</body>
+</html>
