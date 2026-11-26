@@ -2,3 +2,6 @@ node_modules/
 output/frames/
 output/review/
 *.log
+output/remotion-render.mp4
+output/render.log
+output/rollana-voiceover.wav

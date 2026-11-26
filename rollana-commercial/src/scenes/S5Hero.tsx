@@ -32,6 +32,7 @@ export const S5Hero: React.FC = () => {
         {/* gold oval echo of the logo */}
         <div style={{ position: 'absolute', left: 90, top: 470, width: 900, height: 620, borderRadius: '50%', border: '3px solid rgba(197,164,109,0.55)', boxShadow: '0 0 30px rgba(197,164,109,0.25)', opacity: packIn, transform: `scale(${0.9 + 0.1 * packIn})` }} />
         <GoldDust count={20} seed="s5big" big opacity={0.45} rise={6} />
+        <Glow x={540} y={820} r={420} color="rgba(255,250,235,0.5)" blend="screen" />
         <Podium x={540} y={1250} w={920} h={420} glow={packIn} />
         {/* the original wrapper, floating above the pedestal */}
         <Product name="wrapper" x={540} y={800 + float + (1 - packIn) * 120} scale={0.6} rotate={-4 + Math.sin(t * 0.7) * 0.8} opacity={packIn}
@@ -51,7 +52,6 @@ export const S5Hero: React.FC = () => {
         <ContactShadow x={725} y={1262} w={290} opacity={0.5 * ballsIn} />
         <Product name="ballWhole" x={360} y={1262 - 1012 * BALL / 2 + 6 + (1 - ballsIn) * 40} scale={BALL} opacity={ballsIn} shadow="0 18px 18px rgba(80,55,20,0.3)" />
         <Product name="ballCut" x={725} y={1262 - 1092 * BALL / 2 + 14 + (1 - ballsIn) * 40} scale={BALL} opacity={ballsIn} shadow="0 18px 18px rgba(80,55,20,0.3)" />
-        <Glow x={540} y={820} r={420} color="rgba(255,250,235,0.5)" blend="screen" />
       </div>
       <CoconutFlakes count={12} seed="s5" speed={0.3} sizeMul={1.5} opacity={0.8} />
       <GoldDust count={36} seed="s5dust" opacity={0.9} rise={22} />
